@@ -18,15 +18,15 @@ logger = structlog.get_logger(__name__)
 # Bearer token extractor
 bearer_scheme = HTTPBearer(auto_error=False)
 
-# Cache en memoria para las claves públicas JWKS de Supabase (TTL: 1 hora)
+# In-memory cache for Supabase public JWKS keys (TTL: 1 hour)
 _jwks_cache: dict[str, Any] = {"keys": None, "expires_at": 0.0}
 _JWKS_TTL_SECONDS = 3600
 
 
-def _get_supabase_jwks() -> dict[str, Any]:
+def _get_supabase_jwks(force_refresh: bool = False) -> dict[str, Any]:
     """Fetch and cache Supabase public JWKS keys for ES256/RS256 verification."""
     now = time.time()
-    if _jwks_cache["keys"] is not None and now < _jwks_cache["expires_at"]:
+    if not force_refresh and _jwks_cache["keys"] is not None and now < _jwks_cache["expires_at"]:
         return cast("dict[str, Any]", _jwks_cache["keys"])
 
     supabase_url = str(getattr(settings, "SUPABASE_URL", "")).rstrip("/")
@@ -55,13 +55,26 @@ def decode_jwt_token(token: str) -> dict[str, object]:
 
         if alg in ("ES256", "RS256"):
             jwks = _get_supabase_jwks()
-            payload: dict[str, object] = jwt.decode(
-                token,
-                jwks,
-                algorithms=["ES256", "RS256"],
-                options={"verify_aud": False, "verify_signature": True},
-            )
-            return payload
+            try:
+                payload: dict[str, object] = jwt.decode(
+                    token,
+                    jwks,
+                    algorithms=["ES256", "RS256"],
+                    options={"verify_aud": False, "verify_signature": True},
+                )
+                return payload
+            except JWTError:
+                # Key rotation or cache invalidation: retry once with fresh keys if cache was used
+                if _jwks_cache["keys"] is not None:
+                    fresh_jwks = _get_supabase_jwks(force_refresh=True)
+                    retry_payload: dict[str, object] = jwt.decode(
+                        token,
+                        fresh_jwks,
+                        algorithms=["ES256", "RS256"],
+                        options={"verify_aud": False, "verify_signature": True},
+                    )
+                    return retry_payload
+                raise
 
         secret = settings.SUPABASE_JWT_SECRET or settings.SECRET_KEY
         if not secret:
