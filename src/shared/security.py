@@ -3,7 +3,7 @@
 import json
 import time
 import urllib.request
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import structlog
 from fastapi import Depends, HTTPException, status
@@ -27,7 +27,7 @@ def _get_supabase_jwks() -> dict[str, Any]:
     """Fetch and cache Supabase public JWKS keys for ES256/RS256 verification."""
     now = time.time()
     if _jwks_cache["keys"] is not None and now < _jwks_cache["expires_at"]:
-        return _jwks_cache["keys"]
+        return cast("dict[str, Any]", _jwks_cache["keys"])
 
     supabase_url = str(getattr(settings, "SUPABASE_URL", "")).rstrip("/")
     if not supabase_url:
@@ -43,7 +43,7 @@ def _get_supabase_jwks() -> dict[str, Any]:
     except Exception as exc:
         logger.error("Failed to fetch Supabase JWKS", url=jwks_url, error=str(exc))
         if _jwks_cache["keys"] is not None:
-            return _jwks_cache["keys"]
+            return cast("dict[str, Any]", _jwks_cache["keys"])
         raise AuthenticationError("Unable to retrieve authentication keys") from exc
 
 
